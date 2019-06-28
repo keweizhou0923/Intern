@@ -1,0 +1,504 @@
+---
+title: "model_18_test"
+output:
+  html_document:
+    theme: cosmo
+  pdf_document: default
+---
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_document:
+    theme: cosmo
+---
+This file aims to use the merged data to build and explore model for the soil prediction.
+
+## Model trained on 2011-2017_except 2012)
+## create the df
+```{r eval=FALSE, include=FALSE}
+dir <- "C:/Users/KZ26677/Desktop/JD project/crop yield/town_csv/"
+list.files(dir)
+
+
+City_list <-list.files(dir)
+for (city in City_list){
+  city_dir <- paste(dir,city,sep = '')
+  assign(city,read.csv(city_dir) )
+  tmp <- get(city)
+  assign(city,tmp[,-1])#remove the first unnecessay column X
+  rm(tmp)
+}
+
+
+df = data.frame()
+library(jtools)
+to.remove <- c("Previous.Yield..bu.A.","Seed.Rate...A.")
+
+for (city in City_list){
+  tmp =get(city)
+  nums <- unlist(lapply(tmp, is.numeric)) 
+  tmp_name<- paste(city,'_num',sep = '')
+  tmp_num <- assign( tmp_name,tmp[,nums])
+  tmp_num = tmp_num[,!(names(tmp_num) %in% to.remove)]
+ # print(names(tmp_num))
+  df= smartbind(df, tmp_num)
+  assign( tmp_name,tmp_num)
+  rm(tmp)
+  rm(tmp_num)
+  
+}
+rm_list<- c('Harvest.Rate...A.','Gross...A')
+df<- df[,!names(df)%in%rm_list]
+
+#df = df[,c(1:4,15:20)]
+
+
+#df <- df[df$Year!=2012,]
+
+```
+
+```{r}
+library(magrittr)
+library(gtools)
+library(dplyr)
+load(file="all_town.Rda")
+
+#write.csv(df, file = "all_town.cs
+#df = rbind(Winnebago_num,Urbana_num)
+```
+
+
+
+```{r, include=FALSE}
+
+var_hist<- function(df_2011,title){#the funtion plot all the numeric variables with the histgram
+  df_2011 %>%keep(is.numeric) %>% gather() %>% 
+    ggplot(aes(value)) +
+      facet_wrap(~ key, scales = "free") +
+      geom_histogram() + ggtitle(paste(title))
+
+}
+multiplot <- function(..., plotlist = NULL, file, cols = 1, layout = NULL) {
+  require(grid)
+
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  if (is.null(layout)) {
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                 ncol = cols, nrow = ceiling(numPlots/cols))
+}
+
+if (numPlots == 1) {
+print(plots[[1]])
+
+} else {
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+for (i in 1:numPlots) {
+  matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+  print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                  layout.pos.col = matchidx$col))
+ }
+}
+ }
+
+#print(var_hist(df,'all'))
+library(plyr); library(dplyr)
+
+```
+
+
+
+
+```{r echo=FALSE}
+##multiple years set and test
+
+library(caret)
+library(ggridges)
+
+library(ggplot2)
+ggplot(df, aes(y=factor(df$Year), x=Yield..Bu.A. , fill= factor(df$Year))) +
+geom_density_ridges() +
+theme_ridges() +
+theme(legend.position = "none")+ ggtitle("Distribution of Yield") +
+xlab("Year") + ylab("Yield Bu/A")
+
+ggplot(df, aes(y=factor(df$Year), x=df$Stand..x1000. , fill= factor(df$Year))) +
+geom_density_ridges() +
+theme_ridges() +
+theme(legend.position = "none")+ ggtitle("Distribution of Stand X1000") +
+xlab("Year") + ylab("Stand X1000")
+
+df=df[ df$CGDD!=0,]
+yclass <- df$Year
+# summary(factor(yclass))
+in.train =  df$Year<2018 & df$Year!=2012
+#in.train =  df$Year<2018
+in.test =  df$Year==2018
+# ytra <- yclass[in.train]; summary(factor(ytra))
+# ytst <- yclass[in.test]; summary(factor(ytst))
+drop <- "Year"
+Year <- df$Year
+df  =df[,!(names(df) %in% drop)]
+#rownames(df) <- Year
+## standardize features: training parameters of scaling for test-part
+train <- df[in.train,]
+test <- df[in.test,]
+ggplot(df, aes(y=factor(Year), x=Yield..Bu.A. , fill= factor(Year))) +
+geom_density_ridges() +
+theme_ridges() +
+theme(legend.position = "none")+ ggtitle("Distribution of Yield After remove the 0 CGDD") +
+xlab("Year") + ylab("Yield Bu/A")
+
+
+ggplot(df, aes(y=factor(Year), x=df$Stand..x1000. , fill= factor(Year))) +
+geom_density_ridges() +
+theme_ridges() +
+theme(legend.position = "none")+ ggtitle("Distribution of Stand X1000") +
+xlab("Year") + ylab("Stand X1000")
+
+```
+#Linear model(stepwise)
+```{r, include=FALSE}
+n<- names(df)
+x_var <-paste(n[-2],collapse =  '+')
+f<- paste(n[2],'~',x_var)
+lm_mod<- step(lm(f,data =train))
+```
+
+ 
+## The coefficient plot of the LM.
+```{r, echo=FALSE}
+library(jtools)
+plot_summs(lm_mod,scale= TRUE,ci_level = 0.95,plot.distributions = TRUE,rescale.distributions = TRUE,main = "coefficient of Linear model")
+```
+ 
+## Variation explainied
+```{r, echo=FALSE}
+ 
+
+var_pieplot<- function(reg_2011,main){
+  af <- anova(reg_2011)
+  afss<-  af$"Sum Sq"
+  PctExp<- afss/sum(afss)*100
+  PctExp<- round(PctExp, 1)
+  lbls <- paste(rownames(af),PctExp,sep = '=')
+  lbls <-paste(lbls,'%')
+  ind= order(PctExp, decreasing = TRUE)
+  lbls <-paste(lbls,'%')
+  PctExp<-PctExp[ind]
+  lbls <-lbls[ind]
+  library(plotrix)
+  if (length(ind)<6){
+  pie3D(PctExp,labels=lbls,labelcex=1.2,explode=0.2,main=paste(main,"LM Explained variance by predictor",sep=" "))}
+  else{print(data.frame(lbls[1:10],PctExp[1:10]))}
+}
+```
+ 
+## Diagnostic plots
+```{r, echo=FALSE, warning=FALSE}
+mod <-lm_mod
+lm_mse<-  mean(mod$residuals^2)
+as<- anova(mod)
+e<-sum(as$`Sum Sq`[1:(length(as$`Sum Sq`)-1)])/sum(as$`Sum Sq`)
+
+#ge expalined propotion
+lm_explained<- e
+var_pieplot(mod,'train')
+plot(mod)
+pred<-predict(mod,train[, ])
+p_list <- c("p_l_tr")
+
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+
+p_l_tr<- ggplot(data.frame(pred,train), aes(x=train$Yield..Bu.A., y=pred,colour = factor( Year[in.train]))) +  geom_point() + ggtitle("Linear train Distribution of Yield") +xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+
+  
+```
+The liner model tends to overestimate estimating yield when the true value is low. Those points are for year 2012. We should do something to solve this.
+
+## The performce on the test set
+```{r, echo=FALSE}
+mod <-lm_mod
+pred<-predict(mod,test[,names(test)!='Yield..Bu.A.'])
+lm_mse_test<- mean((test$Yield..Bu.A.-pred)^2)
+#p_list <- c(p_list,"p_l_te")
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+p_l_te<- ggplot(data.frame(pred,test), aes(x=test$Yield..Bu.A., y=pred,colour =factor( Year[in.test]))) +  geom_point() + ggtitle("Linear test Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+
+```
+
+#gbm
+
+
+#grip search
+```{r}
+library(h2o)
+h2o.init(nthreads=-1,max_mem_size='8G')
+trainHex<-as.h2o(train)
+y <- "Yield..Bu.A."
+x <- setdiff(names(train), y)
+
+hyper_params <- list(ntrees = seq(200, 500, 10),
+                     learn_rate = seq(0.01, 0.3, 0.02),
+                     max_depth = seq(1, 20, 2),
+                     sample_rate = seq(0.5, 1.0, 0.1),
+                     col_sample_rate = seq(0.2, 1.0, 0.1))
+search_criteria <- list(strategy = "RandomDiscrete",
+                        max_models = 10, 
+                        seed = 1)
+
+# Train the grid
+gbm_grid <- h2o.grid(algorithm = "gbm",
+                     x = x, y = y,
+                     training_frame = trainHex,
+                     nfolds = 5,
+                     seed = 1,
+                     hyper_params = hyper_params,
+                     search_criteria = search_criteria)
+
+
+
+
+# Sort the grid by CV MSe
+grid <- h2o.getGrid(grid_id = gbm_grid@grid_id, sort_by = "mse")
+grid 
+grid_top_model <-as.data.frame(as.numeric(grid@summary_table[1,1:5]))
+grid_top_model
+```
+
+
+```{r}
+
+#testHex<-as.h2o(test)
+y <- "Yield..Bu.A."
+x <- setdiff(names(train), y)
+
+my_gbm1 <- h2o.gbm(x = x,
+                       y = y,
+                       training_frame = trainHex,
+                       distribution = "AUTO",
+                       col_sample_rate = grid_top_model[1,1],
+                       ntrees =grid_top_model[4,1] ,
+                       max_depth = grid_top_model[3,1],
+                       sample_rate= grid_top_model[5,1],
+                       min_rows = 2,
+                       learn_rate = grid_top_model[2,1],
+                       nfolds = 5,
+                       fold_assignment = "Modulo",
+                       keep_cross_validation_predictions = TRUE,
+                       seed = 1)
+
+pred <- as.data.frame(h2o.predict(my_gbm1, trainHex))
+pred =pred$predict
+
+
+gbm_mse_train<- mean((train$Yield..Bu.A.-pred)^2)
+gbm_explained<- 1-gbm_mse_train/var(train$Yield..Bu.A.)
+
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+p_x_tr<- ggplot(data.frame(pred,train), aes(x=train$Yield..Bu.A., y=pred,colour =factor( Year[in.train]))) +  geom_point() + ggtitle("gbm train Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(c(50, 300)) +xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+
+
+```
+
+
+# test
+
+```{r, echo=FALSE}
+  
+testHex<-as.h2o(test)
+
+## Get predictions out; predicts in H2O, as.data.frame gets them into R
+
+
+pred <- as.data.frame(h2o.predict(my_gbm1, testHex))
+pred =pred$predict
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+gbm_mse_test<- mean((test$Yield..Bu.A.-pred)^2)
+p_list <- c(p_list,"p_x_te")
+p_x_te<- ggplot(data.frame(pred,test), aes(x=test$Yield..Bu.A., y=pred,colour = factor( Year[in.test]))) +  geom_point() + ggtitle("gbm test Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+h2o.shutdown()
+
+```
+
+
+# Random forest model
+```{r, include=FALSE}
+library(h2o)
+
+var_pieplot2<- function(rf_out,main){ 
+  pred<-as.data.frame(h2o.predict(rfHex,trainHex))
+  rf_mse_train<- colMeans((train$Yield..Bu.A.-pred)^2)
+  rf_explained<- 1-rf_mse_train/var(train$Yield..Bu.A.)
+  PctExp<- rf_out$percentage* rf_explained
+  PctExp<- c(PctExp,rf_mse_train/var(train$Yield..Bu.A.))
+  PctExp<-round(PctExp*100,2)
+
+  lbls <- paste(c(rf_out$variable,'Residue'),PctExp,sep = '=')
+  ind= order(PctExp,decreasing = T)
+  lbls <-paste(lbls,'%')
+  PctExp<-PctExp[ind]
+  lbls <-lbls[ind]
+  print(data.frame(var_explained=lbls[1:8]))}
+    #zero reason  mean(rf$mse)
+
+
+```
+
+
+
+```{r}
+h2o.init(nthreads=-1,max_mem_size='16G')
+#h2o.no_progress() 
+trainHex<-as.h2o(train)
+features<-colnames(train)[!(colnames(train) %in% c( "Yield..Bu.A." ))]
+## Train a random forest using all default parameters
+rfHex <- h2o.randomForest(x=features,
+                          y="Yield..Bu.A.", 
+                          ntrees = 500,
+                          training_frame=trainHex)
+rf_out <-summary(rfHex)
+pred<-as.data.frame(h2o.predict(rfHex,trainHex))
+pred <- pred$predict
+
+rf_train_mse<- mean((train$Yield..Bu.A.-pred)^2)
+rf_explained<- 1-rf_train_mse/var(train$Yield..Bu.A.)
+var_pieplot2(rf_out,"train")
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+p_r_tr<- ggplot(data.frame(pred,train), aes(x=train$Yield..Bu.A., y=pred,colour =factor( Year[in.train]))) +  geom_point() + ggtitle("RF train Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+```
+# test
+```{r, echo=FALSE}
+  
+testHex<-as.h2o(test)
+
+## Get predictions out; predicts in H2O, as.data.frame gets them into R
+pred<-as.data.frame(h2o.predict(rfHex,testHex))
+pred <- pred$predict
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+rf_test_mse<- mean((test$Yield..Bu.A.-pred)^2)
+#_list <- c(p_list,"p_r_te")
+p_r_te<- ggplot(data.frame(pred,test), aes(x=test$Yield..Bu.A., y=pred,colour = factor( Year[in.test]))) +  geom_point() + ggtitle("RF test Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+
+
+```
+
+
+
+
+
+
+## knn
+```{r}
+library(caret)
+library(FNN)
+train_mse<- numeric()
+test_mse<- numeric()
+
+
+k = c(1, 2,3,4,5, 10,15, 25,30,35,40,45, 50, 250)
+ind =1
+for (i in k){
+  knn <- knn.reg(train =train, test = train, y = train$Yield..Bu.A., k = i)
+  pred <- knn$pred
+  train_mse[ind] <- mean((pred-train$Yield..Bu.A.)^2) 
+  knn <- knn.reg(train =train, test = test, y = train$Yield..Bu.A., k = i)
+  pred <- knn$pred
+  test_mse[ind] <- mean((pred-test$Yield..Bu.A.)^2) 
+  ind = ind+1}
+  
+  # determine "best" k
+  
+
+best_k = k[which.min(test_mse)]
+
+# find overfitting, underfitting, and "best"" k
+fit_status = ifelse(k < best_k, "Over", ifelse(k == best_k, "Best", "Under"))
+model_perform<- data.frame(k,round(train_mse,2),round(test_mse,2),fit_status)
+colnames(model_perform) = c("k", "Train MSE", "Test MSE", "Fit?")  
+model_perform
+knn_train_mse <-model_perform[best_k,1]
+knn_test_mse  <-min(test_mse)
+```
+```{r}
+knn <- knn.reg(train =train, test = train, y = train$Yield..Bu.A., k = best_k)
+pred <- knn$pred 
+knn_explained<- 1-knn_train_mse/var(train$Yield..Bu.A.)
+
+
+p_list <- c(p_list,"p_k_tr")
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(train$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+p_k_tr<- ggplot(data.frame(pred,train), aes(x=train$Yield..Bu.A., y=pred,colour = factor( Year[in.train]))) +  geom_point() + ggtitle("Knn train Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+```
+
+```{r}
+knn <- knn.reg(train =train, test = test, y = train$Yield..Bu.A., k = best_k)
+pred <- knn$pred 
+plot_upper_boundary = max(c(max(pred, na.rm = TRUE), max(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+plot_lower_boundary = min(c(min(pred, na.rm = TRUE), min(test$Yield..Bu.A., na.rm = TRUE)), na.rm = TRUE)
+p_list <- c(p_list,"p_k_te")
+p_k_te<- ggplot(data.frame(pred,test), aes(x=test$Yield..Bu.A., y=pred,colour = factor( Year[in.test]))) +  geom_point() + ggtitle("Knn test Distribution of Yield") +
+  xlab("True Yield") + ylab('Predicted Yield')+ labs(color="Year")+xlim(plot_lower_boundary, plot_upper_boundary) + ylim(plot_lower_boundary, plot_upper_boundary) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+                 linetype="dashed", size=1)
+
+```
+
+
+# model evaluation 
+```{r}
+
+eva = data.frame(matrix(0,4,3))
+cn <- c("train mse",'test mse','% var explained ')
+colnames(eva) =cn
+eva$`train mse` = c(lm_mse,rf_train_mse,knn_train_mse,gbm_mse_train)
+eva$`test mse`= c(lm_mse_test,rf_test_mse,knn_test_mse,gbm_mse_test)
+eva$`% var explained ` <- c(lm_explained,rf_explained,knn_explained,gbm_explained)
+row.names(eva) <-c("lm",'rf','knn',"gbm")
+eva%>%round(2)%>%print()
+```
+
+```{r fig1, fig.height = 10, fig.width = 10}
+
+multiplot(p_l_tr,p_r_tr,p_x_tr,p_k_tr,p_l_te,p_r_te,p_x_te,p_k_te, cols=2)
+
+```
